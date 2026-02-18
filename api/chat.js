@@ -1,18 +1,5 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
 import Groq from "groq-sdk";
-import { DATA } from "./data/index.js";
-
-dotenv.config();
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+import { DATA } from "../data/index.js";
 
 /**
  * Make a small, token-friendly context.
@@ -64,47 +51,23 @@ const summaryContext = {
     : [],
 };
 
-/**
- * Hard-enforce "clean text":
- * - remove markdown headers/bold/italics/code fences
- * - remove bullet symbols that look like markdown
- * - normalize spacing/newlines
- */
 function stripMarkdown(text = "") {
   let t = String(text);
 
-  // Remove code fences
   t = t.replace(/```[\s\S]*?```/g, "");
-
-  // Remove markdown headers like ### Title
   t = t.replace(/^\s{0,3}#{1,6}\s+/gm, "");
-
-  // Remove bold/italic markers **text** *text* __text__ _text_
   t = t.replace(/\*\*(.*?)\*\*/g, "$1");
   t = t.replace(/\*(.*?)\*/g, "$1");
   t = t.replace(/__(.*?)__/g, "$1");
   t = t.replace(/_(.*?)_/g, "$1");
-
-  // Remove blockquotes >
   t = t.replace(/^\s{0,3}>\s?/gm, "");
-
-  // Convert markdown list markers to simple plain bullets (or remove)
-  // "- item" or "* item" -> "• item"
   t = t.replace(/^\s*[-*]\s+/gm, "• ");
-
-  // Remove leftover markdown junk characters (keeps normal punctuation)
   t = t.replace(/[<>`]/g, "");
-
-  // Clean multiple blank lines
   t = t.replace(/\n{3,}/g, "\n\n").trim();
 
   return t;
 }
 
-/**
- * Optional: keep answers short and clean.
- * You can tweak these anytime.
- */
 function buildSystemPrompt(context) {
   return `
 You are an AI assistant for Salam Domingo Kling's portfolio.
@@ -113,7 +76,6 @@ OUTPUT RULES (STRICT):
 - Plain text only.
 - Do not use markdown at all.
 - Do not use these characters for formatting: *, #, _, \`, ~
-- Do not use headings like "1." with bold/italics.
 - Do not use long intros like "I have data about..."
 - Answer directly and cleanly.
 
@@ -140,15 +102,23 @@ ${JSON.stringify(context)}
 `.trim();
 }
 
-app.post("/api/chat", async (req, res) => {
+export default async function handler(req, res) {
+  // CORS for your frontend domain (you can lock this later)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
   try {
-    const { messages } = req.body;
-
-    // Safety: only accept an array of messages
+    const { messages } = req.body || {};
     const safeMessages = Array.isArray(messages) ? messages : [];
-
-    // Remove any system prompts coming from the client
     const filteredMessages = safeMessages.filter((m) => m?.role !== "system");
+
+    const groq = new Groq({
+      apiKey: process.env.GROQ_API_KEY,
+    });
 
     const systemMessage = {
       role: "system",
@@ -165,13 +135,9 @@ app.post("/api/chat", async (req, res) => {
     const rawReply = completion?.choices?.[0]?.message?.content ?? "";
     const cleanReply = stripMarkdown(rawReply);
 
-    res.json({ reply: cleanReply });
+    return res.status(200).json({ reply: cleanReply });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "AI request failed" });
+    return res.status(500).json({ error: "AI request failed" });
   }
-});
-
-app.listen(5000, () => {
-  console.log("Groq AI server running on port 5000");
-});
+}
